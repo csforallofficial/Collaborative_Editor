@@ -1,0 +1,194 @@
+<div>
+  <div class="row">
+    <div class="col-md-8">
+      <textarea id="codeeditor">{{sourceCode}}</textarea>
+    </div>
+    <div class="col-md-4" id="chat">
+      <div class="panel panel-primary">
+        <!-- VIDEO CALL -->
+        <div id="video-container">
+          <video autoplay id="peer-video-stream"></video>
+          <video autoplay id="own-video-stream" muted="true"></video>
+          <div id="second-step">
+            <p>Your viewphone ID: <span id="own-user-id">...</span></p>
+            <div class="form-inline">
+              <input type="text" class="form-control" placeholder="Call User ID..." id="call-id">
+              <a href="#" class="btn btn-sm btn-success" id="call">Begin call</a>
+            </div>
+          </div>
+          <div id="third-step">
+            <p>Talking to <span id="peer-user-id">...</span>
+              <a href="#" class="btn btn-sm btn-danger" id="quit-call">Quit call</a>
+            </p>
+          </div>
+        </div>
+        <!-- CHAT BOX -->
+        <div class="panel-heading">
+          Group Messages
+          <span class="pull-right" id="user-name">
+            {{#if user}}
+              {{user.name}}
+            {{/if}}
+          </span>
+        </div>
+        <div class="panel-body">
+          <ul class="media-list" id="user-messages"></ul>
+        </div>
+        <div class="panel-footer">
+          <div class="input-group">
+            <input type="text" class="form-control" placeholder="Type message here" id="user-send"/>
+            <span class="input-group-btn">
+              <button type="button" class="btn btn-primary" onclick="sendMessage()">SEND</button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<input type="hidden" value="{{roomId}}" id="room-id">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.30.0/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.30.0/mode/javascript/javascript.min.js"></script>
+<script src="/plugins/ot/ot.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="http://cdn.peerjs.com/0.3/peer.js"></script>
+
+</script>
+<script>
+  /** CODE EDITOR FEATURE */
+  var EditorClient = ot.EditorClient;
+  var SocketIOAdapter = ot.SocketIOAdapter;
+  var CodeMirrorAdapter = ot.CodeMirrorAdapter;
+
+  var socket = io.connect('http://localhost:3000');
+  var codeEditor = CodeMirror.fromTextArea(document.getElementById('codeeditor'), {
+    lineNumbers: true,
+    theme: 'rubyblue'
+  });
+
+  var sourceCode = $('#codeeditor').val();
+  var cmClient;
+
+  function init(str, revision, clients, serverAdapter) {
+    if (!sourceCode) {
+      codeEditor.setValue(str);
+    }
+
+    cmClient = window.cmClient = new EditorClient(
+      revision, clients, serverAdapter, new CodeMirrorAdapter(codeEditor)
+    );
+  };
+
+  socket.on('doc', function(obj) {
+    init(obj.str, obj.revision, obj.clients, new SocketIOAdapter(socket));
+  });
+
+  /** CHAT FEATURE */
+  var username = $('#user-name').val();
+
+  if (username === '') {
+    var userId = Math.floor(Math.random() * 4321).toString();
+    username = 'User' + userId;
+    $('#user-name').text(username);
+  };
+
+  var roomId = $('#room-id').val();
+  socket.emit('joinRoom', { room: roomId, username: username });
+
+  var userMessage = function(name, text) {
+    return('<li class="media"><div class="media-body"><div class="media">' +
+      '<div class="media-body">' +
+      '<b>' + name + '</b> : ' + text +
+      '<hr/> </div></div></div></li>'
+    );
+  };
+
+  var sendMessage = function() {
+    var userMessage = $('#user-send').val();
+    socket.emit('chatMessage', { message: userMessage, username: username });
+    $('#user-send').val('');
+  };
+
+  socket.on('chatMessage', function(data) {
+    $('#user-messages').append(userMessage(data.username, data.message));
+  });
+
+  /** PEERJS VIDEO CALL FEATURE */
+  // Compatibility shim
+  navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+  // PeerJS object
+  var peer = new Peer(username + roomId, {
+    // When deploying to production, uncomment the following lines! Update the key if necessary.
+    //host: 'example-12345.herokuapp.com',
+    //path: '/peerjs',
+    //port: 443,
+    //secure: true,
+    key: 'hceptospahlac3di'//,
+    //debug: true
+  });
+
+  peer.on('open', function(){
+    $('#own-user-id').text(peer.id);
+  });
+
+  // Receiving a call
+  peer.on('call', function(call){
+    // Answer the call automatically (instead of prompting user) for demo purposes
+    call.answer(window.localStream);
+    thirdStep(call);
+  });
+
+  peer.on('error', function(err){
+    alert(err.message);
+    // Return to step 2 if error occurs
+    secondStep();
+  });
+
+  // Click handlers setup
+  $(function(){
+    $('#call').click(function(){
+      // Initiate a call!
+      var call = peer.call($('#call-id').val(), window.localStream);
+      thirdStep(call);
+    });
+    $('#quit-call').click(function(){
+      window.existingCall.close();
+      secondStep();
+    });
+    // Get things started
+    step1();
+  });
+
+  function step1 () {
+    // Get audio/video stream
+    navigator.getUserMedia({audio: true, video: true}, function(stream){
+      // Set your video displays
+      $('#own-video-stream').prop('src', URL.createObjectURL(stream));
+      window.localStream = stream;
+      secondStep();
+    }, function(){ $('#step1-error').show(); });
+  }
+
+  function secondStep () {
+    $('#third-step').hide();
+    $('#second-step').show();
+  }
+
+  function thirdStep (call) {
+    // Hang up on an existing call if present
+    if (window.existingCall) {
+      window.existingCall.close();
+    }
+    // Wait for stream on the call, then set peer video display
+    call.on('stream', function(stream){
+      $('#peer-video-stream').prop('src', URL.createObjectURL(stream));
+    });
+    // UI stuff
+    window.existingCall = call;
+    $('#peer-user-id').text(call.peer);
+    call.on('close', secondStep);
+    $('#second-step').hide();
+    $('#third-step').show();
+  }
+</script>
